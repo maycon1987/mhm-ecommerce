@@ -3,5 +3,6 @@ uvicorn
 supabase
 python-dotenv
 requests
-rembg
 Pillow
+rembg[cpu]
+onnxruntime
