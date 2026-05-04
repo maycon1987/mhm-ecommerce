@@ -112,7 +112,20 @@ def to_float(valor):
         return float(valor)
     except:
         return 0.0
+# =========================
+# HEALTH CHECK
+# =========================
+@app.get("/")
+def home():
+    return {"status": "ok", "app": "ecommerce-api"}
 
+
+@app.get("/rotas")
+def listar_rotas():
+    return [
+        {"path": route.path, "name": route.name}
+        for route in app.routes
+    ]
 
 # =========================
 # TINY ERP - ADMIN
