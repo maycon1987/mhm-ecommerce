@@ -149,10 +149,10 @@ def tiny_status():
 # PRODUTOS PÚBLICOS
 # =========================
 @app.get("/produtos")
-def listar_produtos(unidade_id: str = None):
+def listar_produtos(unidade_id: str = None, limit: int = 2000):
     query = supabase.table("produtos").select(
         "id, nome, slug, imagem_url, preco_varejo, peso, comprimento, largura, altura, categoria, ativo"
-    ).eq("ativo", True)
+    ).eq("ativo", True).order("nome").limit(limit)
 
     if unidade_id:
         query = query.eq("unidade_id", unidade_id)
