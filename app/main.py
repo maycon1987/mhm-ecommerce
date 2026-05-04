@@ -1,3 +1,5 @@
+from datetime import datetime
+import re
 from app.services.tiny_service import buscar_produtos_tiny
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -71,7 +73,24 @@ class MidiaProdutoRequest(BaseModel):
     tipo: str
     url: str
     ordem: int = 0
+# =========================
+# FUNÇÕES AUXILIARES
+# =========================
+def gerar_slug(texto: str):
+    if not texto:
+        return "produto-sem-nome"
 
+    texto = texto.lower().strip()
+    texto = re.sub(r"[áàãâä]", "a", texto)
+    texto = re.sub(r"[éèêë]", "e", texto)
+    texto = re.sub(r"[íìîï]", "i", texto)
+    texto = re.sub(r"[óòõôö]", "o", texto)
+    texto = re.sub(r"[úùûü]", "u", texto)
+    texto = re.sub(r"[ç]", "c", texto)
+    texto = re.sub(r"[^a-z0-9]+", "-", texto)
+    texto = texto.strip("-")
+
+    return texto or "produto-sem-nome"
 
 # =========================
 # HEALTH CHECK
@@ -423,29 +442,80 @@ def admin_adicionar_midia(produto_id: str, dados: MidiaProdutoRequest):
 # =========================
 # TINY - SYNC PRODUTOS
 # =========================
+# =========================
+# TINY - SYNC PRODUTOS SEM DUPLICAR
+# =========================
 @app.post("/admin/tiny/sync-produtos")
 def sync_produtos_tiny():
     try:
         produtos = buscar_produtos_tiny()
 
-        salvos = []
+        criados = []
+        atualizados = []
+        ignorados = []
 
         for p in produtos:
-            resp = supabase.table("produtos").insert({
-                "nome": p["nome"],
-                "slug": p["nome"].lower().replace(" ", "-"),
-                "preco_varejo": float(p["preco"] or 0),
-                "ativo": True,
-                "imagem_url": None
-            }).execute()
+            tiny_id = str(p.get("tiny_id") or "").strip()
 
-            if resp.data:
-                salvos.append(resp.data[0])
+            if not tiny_id:
+                ignorados.append({
+                    "produto": p.get("nome"),
+                    "motivo": "Produto sem tiny_id"
+                })
+                continue
+
+            dados_produto = {
+                "tiny_id": tiny_id,
+                "sku": p.get("sku"),
+                "nome": p.get("nome"),
+                "slug": gerar_slug(p.get("nome")),
+                "preco_varejo": float(p.get("preco") or 0),
+                "estoque": float(p.get("estoque") or 0),
+                "origem": "tiny",
+                "ativo": True,
+                "atualizado_tiny_em": datetime.utcnow().isoformat()
+            }
+
+            existe_resp = (
+                supabase
+                .table("produtos")
+                .select("id")
+                .eq("tiny_id", tiny_id)
+                .limit(1)
+                .execute()
+            )
+
+            if existe_resp.data:
+                produto_id = existe_resp.data[0]["id"]
+
+                resp = (
+                    supabase
+                    .table("produtos")
+                    .update(dados_produto)
+                    .eq("id", produto_id)
+                    .execute()
+                )
+
+                if resp.data:
+                    atualizados.append(resp.data[0])
+            else:
+                resp = (
+                    supabase
+                    .table("produtos")
+                    .insert(dados_produto)
+                    .execute()
+                )
+
+                if resp.data:
+                    criados.append(resp.data[0])
 
         return {
             "status": "ok",
             "total_recebido": len(produtos),
-            "total_salvo": len(salvos)
+            "total_criados": len(criados),
+            "total_atualizados": len(atualizados),
+            "total_ignorados": len(ignorados),
+            "ignorados": ignorados[:10]
         }
 
     except Exception as e:
