@@ -83,19 +83,34 @@ def obter_produto_tiny(tiny_id: str):
 
     produto = retorno.get("produto", {})
 
+    # =========================
+    # IMAGEM (TRATAMENTO SEGURO)
+    # =========================
     anexos = produto.get("anexos")
+    imagem_url = None
 
-imagem_url = None
+    if isinstance(anexos, list) and len(anexos) > 0:
+        primeiro = anexos[0]
 
-if isinstance(anexos, list) and len(anexos) > 0:
-    primeiro = anexos[0]
+        if isinstance(primeiro, dict):
+            anexo = primeiro.get("anexo")
 
-    if isinstance(primeiro, dict):
-        anexo = primeiro.get("anexo", {})
+            if isinstance(anexo, dict):
+                imagem_url = anexo.get("url")
 
-        if isinstance(anexo, dict):
-            imagem_url = anexo.get("url")
+    # =========================
+    # CATEGORIA (TRATAMENTO SEGURO)
+    # =========================
+    categoria = produto.get("categoria")
 
+    if isinstance(categoria, dict):
+        categoria_nome = categoria.get("nome")
+    else:
+        categoria_nome = categoria
+
+    # =========================
+    # RETURN FINAL
+    # =========================
     return {
         "tiny_id": tiny_id,
         "nome": produto.get("nome"),
@@ -106,7 +121,7 @@ if isinstance(anexos, list) and len(anexos) > 0:
         "comprimento": produto.get("comprimento"),
         "largura": produto.get("largura"),
         "altura": produto.get("altura"),
-        "categoria": produto.get("categoria"),
+        "categoria": categoria_nome,
         "ncm": produto.get("ncm"),
         "descricao": produto.get("descricao_complementar"),
         "imagem_url": imagem_url
