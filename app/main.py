@@ -2,6 +2,12 @@ from datetime import datetime
 import re
 from app.services.tiny_service import buscar_produtos_tiny, obter_produto_tiny
 from fastapi import FastAPI, HTTPException
+from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
+from rembg import remove
+from PIL import Image
+import requests
+from io import BytesIO
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -536,6 +542,29 @@ def sync_produtos_tiny():
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+# =========================
+# IMAGEM SEM FUNDO
+# =========================
+@app.get("/imagem-sem-fundo")
+def imagem_sem_fundo(url: str):
+    try:
+        response = requests.get(url)
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=400, detail="Erro ao baixar imagem")
+
+        input_image = Image.open(BytesIO(response.content))
+
+        output = remove(input_image)
+
+        buffer = BytesIO()
+        output.save(buffer, format="PNG")
+        buffer.seek(0)
+
+        return StreamingResponse(buffer, media_type="image/png")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
