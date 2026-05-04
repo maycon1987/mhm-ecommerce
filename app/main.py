@@ -92,20 +92,18 @@ def gerar_slug(texto: str):
 
     return texto or "produto-sem-nome"
 
-# =========================
-# HEALTH CHECK
-# =========================
-@app.get("/")
-def home():
-    return {"status": "ok", "app": "ecommerce-api"}
 
+def to_float(valor):
+    if valor is None:
+        return 0.0
 
-@app.get("/rotas")
-def listar_rotas():
-    return [
-        {"path": route.path, "name": route.name}
-        for route in app.routes
-    ]
+    if isinstance(valor, str):
+        valor = valor.replace(",", ".").strip()
+
+    try:
+        return float(valor)
+    except:
+        return 0.0
 
 
 # =========================
@@ -469,8 +467,8 @@ def sync_produtos_tiny():
                 "sku": p.get("sku"),
                 "nome": p.get("nome"),
                 "slug": gerar_slug(p.get("nome")),
-                "preco_varejo": float(p.get("preco") or 0),
-                "estoque": float(p.get("estoque") or 0),
+                "preco_varejo": to_float(p.get("preco")),
+"estoque": to_float(p.get("estoque")),
                 "origem": "tiny",
                 "ativo": True,
                 "atualizado_tiny_em": datetime.utcnow().isoformat()
