@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
 from typing import List, Optional
@@ -18,6 +19,16 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # =========================
 app = FastAPI(title="MHM Ecommerce API")
 
+# =========================
+# CORS - LOVABLE / FRONTEND
+# =========================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # =========================
 # MODELOS
@@ -67,6 +78,32 @@ class MidiaProdutoRequest(BaseModel):
 @app.get("/")
 def home():
     return {"status": "ok", "app": "ecommerce-api"}
+
+
+@app.get("/rotas")
+def listar_rotas():
+    return [
+        {"path": route.path, "name": route.name}
+        for route in app.routes
+    ]
+
+
+# =========================
+# TINY ERP - ADMIN
+# =========================
+@app.get("/admin/tiny/status")
+def tiny_status():
+    tiny_token = os.getenv("TINY_TOKEN")
+
+    return {
+        "status": "online",
+        "tiny_configurado": bool(tiny_token),
+        "mensagem": (
+            "Integração Tiny configurada e pronta para sincronização"
+            if tiny_token
+            else "TINY_TOKEN não configurado nas variáveis de ambiente"
+        )
+    }
 
 
 # =========================
