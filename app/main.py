@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from supabase import create_client, Client
-from typing import List
+from typing import List, Optional
 import os
 import requests
 
@@ -17,6 +17,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # APP
 # =========================
 app = FastAPI(title="MHM Ecommerce API")
+
 
 # =========================
 # MODELOS
@@ -36,6 +37,30 @@ class CotarFreteRequest(BaseModel):
     itens: List[ItemFrete]
 
 
+class ProdutoAdminRequest(BaseModel):
+    nome: str
+    slug: str
+    descricao: Optional[str] = None
+    categoria: Optional[str] = None
+    unidade_id: Optional[str] = None
+    preco_varejo: Optional[float] = None
+    peso: Optional[float] = None
+    comprimento: Optional[float] = None
+    largura: Optional[float] = None
+    altura: Optional[float] = None
+    imagem_url: Optional[str] = None
+    video_embed: Optional[str] = None
+    meta_title: Optional[str] = None
+    meta_description: Optional[str] = None
+    ativo: bool = True
+
+
+class MidiaProdutoRequest(BaseModel):
+    tipo: str
+    url: str
+    ordem: int = 0
+
+
 # =========================
 # HEALTH CHECK
 # =========================
@@ -45,13 +70,13 @@ def home():
 
 
 # =========================
-# LISTAR PRODUTOS
+# PRODUTOS PÚBLICOS
 # =========================
 @app.get("/produtos")
 def listar_produtos(unidade_id: str = None):
     query = supabase.table("produtos").select(
-        "id, nome, slug, imagem_url, preco_varejo, peso, comprimento, largura, altura"
-    )
+        "id, nome, slug, imagem_url, preco_varejo, peso, comprimento, largura, altura, categoria, ativo"
+    ).eq("ativo", True)
 
     if unidade_id:
         query = query.eq("unidade_id", unidade_id)
@@ -60,9 +85,6 @@ def listar_produtos(unidade_id: str = None):
     return response.data
 
 
-# =========================
-# DETALHE DO PRODUTO
-# =========================
 @app.get("/produto/{slug}")
 def detalhe_produto(slug: str):
     produto_resp = (
@@ -70,6 +92,7 @@ def detalhe_produto(slug: str):
         .table("produtos")
         .select("*")
         .eq("slug", slug)
+        .eq("ativo", True)
         .single()
         .execute()
     )
@@ -88,9 +111,19 @@ def detalhe_produto(slug: str):
         .execute()
     )
 
+    midias_resp = (
+        supabase
+        .table("produto_midias")
+        .select("*")
+        .eq("produto_id", produto["id"])
+        .order("ordem")
+        .execute()
+    )
+
     return {
         "produto": produto,
-        "precos": precos_resp.data
+        "precos": precos_resp.data,
+        "midias": midias_resp.data
     }
 
 
@@ -156,7 +189,7 @@ def calcular_preco(dados: CalcularPrecoRequest):
 @app.post("/cotar-frete")
 def cotar_frete(dados: CotarFreteRequest):
     token = os.getenv("MELHOR_ENVIO_TOKEN")
-    melhor_envio_url = os.getenv("MELHOR_ENVIO_URL", "https://sandbox.melhorenvio.com.br")
+    melhor_envio_url = os.getenv("MELHOR_ENVIO_URL", "https://www.melhorenvio.com.br")
     cep_origem = os.getenv("CEP_ORIGEM")
     app_user_agent = os.getenv("APP_USER_AGENT", "MHM Ecommerce (mhmcaixas@gmail.com)")
 
@@ -192,9 +225,7 @@ def cotar_frete(dados: CotarFreteRequest):
                 detail=f"Produto não encontrado: {item.produto_id}"
             )
 
-        campos_obrigatorios = ["peso", "comprimento", "largura", "altura"]
-
-        for campo in campos_obrigatorios:
+        for campo in ["peso", "comprimento", "largura", "altura"]:
             if produto.get(campo) is None:
                 raise HTTPException(
                     status_code=400,
@@ -212,12 +243,8 @@ def cotar_frete(dados: CotarFreteRequest):
         })
 
     payload = {
-        "from": {
-            "postal_code": cep_origem
-        },
-        "to": {
-            "postal_code": cep_destino
-        },
+        "from": {"postal_code": cep_origem},
+        "to": {"postal_code": cep_destino},
         "products": produtos_envio,
         "options": {
             "receipt": False,
@@ -269,3 +296,89 @@ def cotar_frete(dados: CotarFreteRequest):
         "opcoes": opcoes,
         "resposta_original": resultado
     }
+
+
+# =========================
+# ADMIN - PRODUTOS
+# =========================
+@app.get("/admin/produtos")
+def admin_listar_produtos():
+    resp = supabase.table("produtos").select("*").order("nome").execute()
+    return resp.data
+
+
+@app.post("/admin/produtos")
+def admin_criar_produto(dados: ProdutoAdminRequest):
+    resp = supabase.table("produtos").insert(dados.dict()).execute()
+
+    if not resp.data:
+        raise HTTPException(status_code=400, detail="Erro ao criar produto")
+
+    return resp.data[0]
+
+
+@app.put("/admin/produtos/{produto_id}")
+def admin_atualizar_produto(produto_id: str, dados: ProdutoAdminRequest):
+    resp = (
+        supabase
+        .table("produtos")
+        .update(dados.dict())
+        .eq("id", produto_id)
+        .execute()
+    )
+
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+
+    return resp.data[0]
+
+
+@app.delete("/admin/produtos/{produto_id}")
+def admin_desativar_produto(produto_id: str):
+    resp = (
+        supabase
+        .table("produtos")
+        .update({"ativo": False})
+        .eq("id", produto_id)
+        .execute()
+    )
+
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Produto não encontrado")
+
+    return {"status": "ok", "produto": resp.data[0]}
+
+
+# =========================
+# ADMIN - MÍDIAS
+# =========================
+@app.get("/admin/produtos/{produto_id}/midias")
+def admin_listar_midias(produto_id: str):
+    resp = (
+        supabase
+        .table("produto_midias")
+        .select("*")
+        .eq("produto_id", produto_id)
+        .order("ordem")
+        .execute()
+    )
+
+    return resp.data
+
+
+@app.post("/admin/produtos/{produto_id}/midias")
+def admin_adicionar_midia(produto_id: str, dados: MidiaProdutoRequest):
+    if dados.tipo not in ["imagem", "video"]:
+        raise HTTPException(status_code=400, detail="Tipo precisa ser imagem ou video")
+
+    resp = supabase.table("produto_midias").insert({
+        "produto_id": produto_id,
+        "tipo": dados.tipo,
+        "url": dados.url,
+        "ordem": dados.ordem
+    }).execute()
+
+    if not resp.data:
+        raise HTTPException(status_code=400, detail="Erro ao adicionar mídia")
+
+    return resp.data[0]
