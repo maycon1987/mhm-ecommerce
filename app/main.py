@@ -80,15 +80,17 @@ def gerar_slug(texto: str):
     if not texto:
         return "produto-sem-nome"
 
-    texto = texto.lower().strip()
+    texto = texto.strip().lower()  # 🔥 remove espaços no começo
+
     texto = re.sub(r"[áàãâä]", "a", texto)
     texto = re.sub(r"[éèêë]", "e", texto)
     texto = re.sub(r"[íìîï]", "i", texto)
     texto = re.sub(r"[óòõôö]", "o", texto)
     texto = re.sub(r"[úùûü]", "u", texto)
     texto = re.sub(r"[ç]", "c", texto)
+
     texto = re.sub(r"[^a-z0-9]+", "-", texto)
-    texto = texto.strip("-")
+    texto = texto.strip("-")  # 🔥 remove traços no começo/fim
 
     return texto or "produto-sem-nome"
 
