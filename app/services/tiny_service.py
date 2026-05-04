@@ -83,12 +83,18 @@ def obter_produto_tiny(tiny_id: str):
 
     produto = retorno.get("produto", {})
 
-    anexos = produto.get("anexos", [])
-    imagem_url = None
+    anexos = produto.get("anexos")
 
-    if isinstance(anexos, list) and len(anexos) > 0:
-        primeiro = anexos[0].get("anexo", {})
-        imagem_url = primeiro.get("url")
+imagem_url = None
+
+if isinstance(anexos, list) and len(anexos) > 0:
+    primeiro = anexos[0]
+
+    if isinstance(primeiro, dict):
+        anexo = primeiro.get("anexo", {})
+
+        if isinstance(anexo, dict):
+            imagem_url = anexo.get("url")
 
     return {
         "tiny_id": tiny_id,
