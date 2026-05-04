@@ -1,6 +1,6 @@
 from datetime import datetime
 import re
-from app.services.tiny_service import buscar_produtos_tiny
+from app.services.tiny_service import buscar_produtos_tiny, obter_produto_tiny
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -440,10 +440,7 @@ def admin_adicionar_midia(produto_id: str, dados: MidiaProdutoRequest):
 
     return resp.data[0]
 # =========================
-# TINY - SYNC PRODUTOS
-# =========================
-# =========================
-# TINY - SYNC PRODUTOS SEM DUPLICAR
+# TINY - SYNC PRODUTOS COMPLETO
 # =========================
 @app.post("/admin/tiny/sync-produtos")
 def sync_produtos_tiny():
@@ -464,13 +461,32 @@ def sync_produtos_tiny():
                 })
                 continue
 
+            try:
+                detalhe = obter_produto_tiny(tiny_id)
+            except Exception as erro_detalhe:
+                ignorados.append({
+                    "produto": p.get("nome"),
+                    "tiny_id": tiny_id,
+                    "motivo": str(erro_detalhe)
+                })
+                continue
+
+            nome = detalhe.get("nome") or p.get("nome")
+
             dados_produto = {
                 "tiny_id": tiny_id,
-                "sku": p.get("sku"),
-                "nome": p.get("nome"),
-                "slug": gerar_slug(p.get("nome")),
-                "preco_varejo": to_float(p.get("preco")),
-"estoque": to_float(p.get("estoque")),
+                "sku": detalhe.get("sku") or p.get("sku"),
+                "nome": nome,
+                "slug": gerar_slug(nome),
+                "descricao": detalhe.get("descricao"),
+                "categoria": detalhe.get("categoria"),
+                "preco_varejo": to_float(detalhe.get("preco") or p.get("preco")),
+                "estoque": to_float(detalhe.get("estoque") or p.get("estoque")),
+                "peso": to_float(detalhe.get("peso")),
+                "comprimento": to_float(detalhe.get("comprimento")),
+                "largura": to_float(detalhe.get("largura")),
+                "altura": to_float(detalhe.get("altura")),
+                "imagem_url": detalhe.get("imagem_url"),
                 "origem": "tiny",
                 "ativo": True,
                 "atualizado_tiny_em": datetime.utcnow().isoformat()
@@ -515,8 +531,11 @@ def sync_produtos_tiny():
             "total_criados": len(criados),
             "total_atualizados": len(atualizados),
             "total_ignorados": len(ignorados),
-            "ignorados": ignorados[:10]
+            "ignorados": ignorados[:20]
         }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
