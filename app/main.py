@@ -1,3 +1,4 @@
+from app.services.tiny_service import buscar_produtos_tiny
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -419,3 +420,33 @@ def admin_adicionar_midia(produto_id: str, dados: MidiaProdutoRequest):
         raise HTTPException(status_code=400, detail="Erro ao adicionar mídia")
 
     return resp.data[0]
+# =========================
+# TINY - SYNC PRODUTOS
+# =========================
+@app.post("/admin/tiny/sync-produtos")
+def sync_produtos_tiny():
+    try:
+        produtos = buscar_produtos_tiny()
+
+        salvos = []
+
+        for p in produtos:
+            resp = supabase.table("produtos").insert({
+                "nome": p["nome"],
+                "slug": p["nome"].lower().replace(" ", "-"),
+                "preco_varejo": float(p["preco"] or 0),
+                "ativo": True,
+                "imagem_url": None
+            }).execute()
+
+            if resp.data:
+                salvos.append(resp.data[0])
+
+        return {
+            "status": "ok",
+            "total_recebido": len(produtos),
+            "total_salvo": len(salvos)
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
