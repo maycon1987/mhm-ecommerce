@@ -93,34 +93,43 @@ def obter_produto_tiny(tiny_id: str):
         raise Exception(f"Produto Tiny veio em formato inválido: {produto}")
 
     # =========================
-    # IMAGEM
-    # =========================
-    imagem_url = None
-    anexos = produto.get("anexos") or []
+# IMAGEM
+# =========================
+imagem_url = None
+anexos = produto.get("anexos") or []
 
-    if isinstance(anexos, list) and len(anexos) > 0:
-        primeiro = anexos[0]
+if isinstance(anexos, list) and len(anexos) > 0:
+    primeiro = anexos[0]
 
-        if isinstance(primeiro, dict):
-            anexo = primeiro.get("anexo")
+    if isinstance(primeiro, dict):
+        anexo = primeiro.get("anexo")
 
-            if isinstance(anexo, dict):
-                imagem_url = anexo.get("url")
+        if isinstance(anexo, str):
+            imagem_url = anexo
 
-    elif isinstance(anexos, dict):
-        lista = anexos.get("anexo")
+        elif isinstance(anexo, dict):
+            imagem_url = anexo.get("url")
 
-        if isinstance(lista, list) and len(lista) > 0:
-            primeiro = lista[0]
+elif isinstance(anexos, dict):
+    anexo = anexos.get("anexo")
 
-            if isinstance(primeiro, dict):
-                imagem_url = primeiro.get("url")
+    if isinstance(anexo, str):
+        imagem_url = anexo
 
-        elif isinstance(lista, dict):
-            imagem_url = lista.get("url")
+    elif isinstance(anexo, list) and len(anexo) > 0:
+        primeiro = anexo[0]
 
-    if not imagem_url:
-        imagem_url = produto.get("imagem") or produto.get("urlImagem")
+        if isinstance(primeiro, str):
+            imagem_url = primeiro
+
+        elif isinstance(primeiro, dict):
+            imagem_url = primeiro.get("url")
+
+    elif isinstance(anexo, dict):
+        imagem_url = anexo.get("url")
+
+if not imagem_url:
+    imagem_url = produto.get("imagem") or produto.get("urlImagem")
 
     # =========================
     # CATEGORIA
