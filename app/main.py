@@ -581,3 +581,24 @@ def imagem_sem_fundo(url: str):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+# =========================
+# DEBUG - PRODUTO TINY
+# =========================
+@app.get("/admin/tiny/debug-produto/{tiny_id}")
+def debug_produto_tiny(tiny_id: str):
+    token = os.getenv("TINY_TOKEN")
+
+    if not token:
+        raise HTTPException(status_code=500, detail="TINY_TOKEN não configurado")
+
+    url = "https://api.tiny.com.br/api2/produto.obter.php"
+
+    params = {
+        "token": token,
+        "id": tiny_id,
+        "formato": "JSON"
+    }
+
+    response = requests.get(url, params=params, timeout=30)
+
+    return response.json()
