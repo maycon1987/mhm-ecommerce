@@ -40,6 +40,13 @@ app.add_middleware(
 )
 
 # =========================
+# TESTE PRODUTO TINY
+# =========================
+@app.get("/teste-obter-produto/{tiny_id}")
+def teste_obter_produto(tiny_id: str):
+    return obter_produto_tiny(tiny_id)
+
+# =========================
 # MODELOS
 # =========================
 class CalcularPrecoRequest(BaseModel):
