@@ -83,11 +83,11 @@ def obter_produto_tiny(tiny_id: str):
 
     produto = retorno.get("produto", {})
 
-    # =========================
+  # =========================
 # IMAGEM (TRATAMENTO COMPLETO)
 # =========================
 imagem_url = None
-anexos = produto.get("anexos")
+anexos = produto.get("anexos") or []
 
 if isinstance(anexos, list) and len(anexos) > 0:
     primeiro = anexos[0]
