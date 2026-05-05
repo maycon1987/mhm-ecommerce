@@ -481,7 +481,7 @@ def sync_produtos_tiny():
                 continue
 
             try:
-                detalhe = obter_produto_tiny(tiny_id)
+                produto_tiny = obter_produto_tiny(tiny_id)
             except Exception as erro_detalhe:
                 ignorados.append({
                     "produto": p.get("nome"),
@@ -490,22 +490,28 @@ def sync_produtos_tiny():
                 })
                 continue
 
-            nome = detalhe.get("nome") or p.get("nome")
+            nome = produto_tiny.get("nome") or p.get("nome") or "Produto sem nome"
 
             dados_produto = {
                 "tiny_id": tiny_id,
-                "sku": detalhe.get("sku") or p.get("sku"),
+                "sku": produto_tiny.get("sku") or p.get("sku"),
                 "nome": nome,
                 "slug": gerar_slug(nome),
-                "descricao": detalhe.get("descricao"),
-                "categoria": detalhe.get("categoria"),
-                "preco_varejo": to_float(detalhe.get("preco") or p.get("preco")),
-                "estoque": to_float(detalhe.get("estoque") or p.get("estoque")),
-                "peso": to_float(detalhe.get("peso")),
-                "comprimento": to_float(detalhe.get("comprimento")),
-                "largura": to_float(detalhe.get("largura")),
-                "altura": to_float(detalhe.get("altura")),
-                "imagem_url": detalhe.get("imagem_url"),
+
+                "descricao": produto_tiny.get("descricao"),
+                "categoria": produto_tiny.get("categoria"),
+
+                "preco_varejo": to_float(produto_tiny.get("preco") or p.get("preco")),
+                "estoque": to_float(produto_tiny.get("estoque") or p.get("estoque")),
+
+                "peso": to_float(produto_tiny.get("peso")),
+                "comprimento": to_float(produto_tiny.get("comprimento")),
+                "largura": to_float(produto_tiny.get("largura")),
+                "altura": to_float(produto_tiny.get("altura")),
+
+                # ✅ IMAGEM DO TINY
+                "imagem_url": produto_tiny.get("imagem_url"),
+
                 "origem": "tiny",
                 "ativo": True,
                 "atualizado_tiny_em": datetime.utcnow().isoformat()
@@ -552,32 +558,6 @@ def sync_produtos_tiny():
             "total_ignorados": len(ignorados),
             "ignorados": ignorados[:20]
         }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-# =========================
-# IMAGEM SEM FUNDO
-# =========================
-@app.get("/imagem-sem-fundo")
-def imagem_sem_fundo(url: str):
-    try:
-        response = requests.get(url)
-
-        if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Erro ao baixar imagem")
-
-        input_image = Image.open(BytesIO(response.content))
-
-        output = remove(input_image)
-
-        buffer = BytesIO()
-        output.save(buffer, format="PNG")
-        buffer.seek(0)
-
-        return StreamingResponse(buffer, media_type="image/png")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
