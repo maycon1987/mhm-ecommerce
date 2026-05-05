@@ -65,7 +65,6 @@ def buscar_produtos_tiny():
 
     return todos_produtos
 
-
 def obter_produto_tiny(tiny_id: str):
     token = get_tiny_token()
     url = "https://api.tiny.com.br/api2/produto.obter.php"
@@ -89,58 +88,48 @@ def obter_produto_tiny(tiny_id: str):
 
     produto = retorno.get("produto", {})
 
-    if not isinstance(produto, dict):
-        raise Exception(f"Produto Tiny veio em formato inválido: {produto}")
-
     # =========================
-# IMAGEM
-# =========================
-imagem_url = None
-anexos = produto.get("anexos") or []
+    # IMAGEM (FORMATO REAL DO SEU TINY)
+    # =========================
+    imagem_url = None
+    anexos = produto.get("anexos") or []
 
-if isinstance(anexos, list) and len(anexos) > 0:
-    primeiro = anexos[0]
+    if isinstance(anexos, list) and len(anexos) > 0:
+        primeiro = anexos[0]
 
-    if isinstance(primeiro, dict):
-        anexo = primeiro.get("anexo")
+        if isinstance(primeiro, dict):
+            anexo = primeiro.get("anexo")
+
+            if isinstance(anexo, str):
+                imagem_url = anexo
+
+            elif isinstance(anexo, dict):
+                imagem_url = anexo.get("url")
+
+    elif isinstance(anexos, dict):
+        anexo = anexos.get("anexo")
 
         if isinstance(anexo, str):
             imagem_url = anexo
 
+        elif isinstance(anexo, list) and len(anexo) > 0:
+            primeiro = anexo[0]
+
+            if isinstance(primeiro, str):
+                imagem_url = primeiro
+
+            elif isinstance(primeiro, dict):
+                imagem_url = primeiro.get("url")
+
         elif isinstance(anexo, dict):
             imagem_url = anexo.get("url")
 
-elif isinstance(anexos, dict):
-    anexo = anexos.get("anexo")
-
-    if isinstance(anexo, str):
-        imagem_url = anexo
-
-    elif isinstance(anexo, list) and len(anexo) > 0:
-        primeiro = anexo[0]
-
-        if isinstance(primeiro, str):
-            imagem_url = primeiro
-
-        elif isinstance(primeiro, dict):
-            imagem_url = primeiro.get("url")
-
-    elif isinstance(anexo, dict):
-        imagem_url = anexo.get("url")
-
-if not imagem_url:
-    imagem_url = produto.get("imagem") or produto.get("urlImagem")
+    if not imagem_url:
+        imagem_url = produto.get("imagem") or produto.get("urlImagem")
 
     # =========================
-    # CATEGORIA
+    # RETORNO (DENTRO DA FUNÇÃO!)
     # =========================
-    categoria = produto.get("categoria")
-
-    if isinstance(categoria, dict):
-        categoria_nome = categoria.get("nome")
-    else:
-        categoria_nome = categoria
-
     return {
         "tiny_id": tiny_id,
         "nome": produto.get("nome"),
@@ -151,7 +140,7 @@ if not imagem_url:
         "comprimento": produto.get("comprimento"),
         "largura": produto.get("largura"),
         "altura": produto.get("altura"),
-        "categoria": categoria_nome,
+        "categoria": produto.get("categoria"),
         "ncm": produto.get("ncm"),
         "descricao": produto.get("descricao_complementar"),
         "imagem_url": imagem_url
