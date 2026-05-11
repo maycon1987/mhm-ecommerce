@@ -255,35 +255,44 @@ def listar_produtos(categoria: str = None, limit: int = 500):
     Retorna produtos agrupados com variantes embutidas.
     Lê da tabela 'products' (nova estrutura).
     """
-    query = (
-        supabase.table("products")
-        .select("id, nome, slug, categoria, imagem_principal, ativo")
-        .eq("ativo", True)
-        .order("nome")
-        .limit(limit)
-    )
-
-    if categoria:
-        query = query.ilike("categoria", f"%{categoria}%")
-
-    resp = query.execute()
-    produtos = resp.data
-
-    # Para cada produto, busca as variantes
-    resultado = []
-    for prod in produtos:
-        vars_resp = (
-            supabase.table("product_variants")
-            .select("id, sku, variante, preco, estoque, peso, largura, altura, comprimento, imagem")
-            .eq("product_id", prod["id"])
-            .order("preco")
-            .execute()
+    try:
+        query = (
+            supabase.table("products")
+            .select("id, nome, slug, categoria, imagem_principal, ativo")
+            .eq("ativo", True)
+            .order("nome")
+            .limit(limit)
         )
-        prod["variantes"] = vars_resp.data
-        prod["preco_minimo"] = min((v["preco"] for v in vars_resp.data if v["preco"]), default=0)
-        resultado.append(prod)
 
-    return resultado
+        if categoria:
+            query = query.ilike("categoria", f"%{categoria}%")
+
+        resp = query.execute()
+        produtos = resp.data or []
+
+        resultado = []
+        for prod in produtos:
+            try:
+                vars_resp = (
+                    supabase.table("product_variants")
+                    .select("id, sku, variante, preco, estoque, peso, largura, altura, comprimento, imagem")
+                    .eq("product_id", prod["id"])
+                    .order("preco")
+                    .execute()
+                )
+                variantes = vars_resp.data or []
+            except Exception:
+                variantes = []
+
+            precos = [v["preco"] for v in variantes if v.get("preco")]
+            prod["variantes"] = variantes
+            prod["preco_minimo"] = min(precos) if precos else 0
+            resultado.append(prod)
+
+        return resultado
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/produto/{slug}")
