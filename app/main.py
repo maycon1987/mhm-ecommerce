@@ -1,13 +1,8 @@
 from datetime import datetime
 import re
 from app.services.tiny_service import buscar_produtos_tiny, obter_produto_tiny
-from fastapi import FastAPI, HTTPException
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import StreamingResponse
-from rembg import remove
-from PIL import Image
-import requests
-from io import BytesIO
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -20,6 +15,7 @@ import requests
 # =========================
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "mhm-admin-2024")  # Senha do painel admin
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -29,7 +25,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI(title="MHM Ecommerce API")
 
 # =========================
-# CORS - LOVABLE / FRONTEND
+# CORS
 # =========================
 app.add_middleware(
     CORSMiddleware,
@@ -38,13 +34,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# =========================
-# TESTE PRODUTO TINY
-# =========================
-@app.get("/teste-obter-produto/{tiny_id}")
-def teste_obter_produto(tiny_id: str):
-    return obter_produto_tiny(tiny_id)
 
 # =========================
 # MODELOS
@@ -69,56 +58,124 @@ class ProdutoAdminRequest(BaseModel):
     slug: str
     descricao: Optional[str] = None
     categoria: Optional[str] = None
-    unidade_id: Optional[str] = None
-    preco_varejo: Optional[float] = None
+    imagem_principal: Optional[str] = None
+    ativo: bool = True
+
+
+class VarianteRequest(BaseModel):
+    sku: Optional[str] = None
+    variante: str
+    preco: Optional[float] = None
+    estoque: Optional[float] = None
     peso: Optional[float] = None
-    comprimento: Optional[float] = None
     largura: Optional[float] = None
     altura: Optional[float] = None
-    imagem_url: Optional[str] = None
-    video_embed: Optional[str] = None
-    meta_title: Optional[str] = None
-    meta_description: Optional[str] = None
+    comprimento: Optional[float] = None
+    imagem: Optional[str] = None
+
+
+class ProdutoComVariantesRequest(BaseModel):
+    nome: str
+    categoria: Optional[str] = None
+    descricao: Optional[str] = None
+    imagem_principal: Optional[str] = None
     ativo: bool = True
+    variantes: List[VarianteRequest] = []
 
 
 class MidiaProdutoRequest(BaseModel):
     tipo: str
     url: str
     ordem: int = 0
+
+
 # =========================
 # FUNÇÕES AUXILIARES
 # =========================
 def gerar_slug(texto: str):
     if not texto:
         return "produto-sem-nome"
-
-    texto = texto.strip().lower()  # 🔥 remove espaços no começo
-
+    texto = texto.strip().lower()
     texto = re.sub(r"[áàãâä]", "a", texto)
     texto = re.sub(r"[éèêë]", "e", texto)
     texto = re.sub(r"[íìîï]", "i", texto)
     texto = re.sub(r"[óòõôö]", "o", texto)
     texto = re.sub(r"[úùûü]", "u", texto)
     texto = re.sub(r"[ç]", "c", texto)
-
     texto = re.sub(r"[^a-z0-9]+", "-", texto)
-    texto = texto.strip("-")  # 🔥 remove traços no começo/fim
-
+    texto = texto.strip("-")
     return texto or "produto-sem-nome"
 
 
 def to_float(valor):
     if valor is None:
         return 0.0
-
     if isinstance(valor, str):
         valor = valor.replace(",", ".").strip()
-
     try:
         return float(valor)
     except:
         return 0.0
+
+
+def extrair_pai_e_variante(nome: str):
+    """
+    Separa produto pai e variante pelo padrão ' - '
+    'Caixa Papelão n04 - 25unds' → ('Caixa Papelão n04', '25unds')
+    'Caixa Papelão n04' → ('Caixa Papelão n04', '1un')
+    """
+    nome = nome.strip()
+    if " - " in nome:
+        partes = nome.rsplit(" - ", 1)
+        return partes[0].strip(), partes[1].strip()
+    return nome, "1un"
+
+
+def agrupar_por_pai(produtos: list) -> dict:
+    """
+    Agrupa lista de produtos pelo produto pai.
+    Ignora produtos sem categoria (itens internos do Tiny).
+    """
+    grupos = {}
+    ignorados = []
+
+    for p in produtos:
+        nome = (p.get("nome") or "").strip()
+        categoria = (p.get("categoria") or "").strip()
+
+        if not categoria:
+            ignorados.append(nome)
+            continue
+
+        pai, variante = extrair_pai_e_variante(nome)
+
+        if pai not in grupos:
+            grupos[pai] = {
+                "categoria": categoria,
+                "imagem_principal": p.get("imagem_url"),
+                "variantes": []
+            }
+
+        # Usa a imagem do pai ou da primeira variante disponível
+        if p.get("imagem_url") and not grupos[pai]["imagem_principal"]:
+            grupos[pai]["imagem_principal"] = p.get("imagem_url")
+
+        grupos[pai]["variantes"].append({
+            "tiny_id": str(p.get("tiny_id") or p.get("id") or ""),
+            "sku": p.get("sku") or p.get("codigo") or "",
+            "variante": variante,
+            "preco": to_float(p.get("preco_varejo") or p.get("preco")),
+            "estoque": to_float(p.get("estoque")),
+            "peso": to_float(p.get("peso")),
+            "largura": to_float(p.get("largura")),
+            "altura": to_float(p.get("altura")),
+            "comprimento": to_float(p.get("comprimento")),
+            "imagem": p.get("imagem_url"),
+        })
+
+    return grupos, ignorados
+
+
 # =========================
 # HEALTH CHECK
 # =========================
@@ -129,50 +186,74 @@ def home():
 
 @app.get("/rotas")
 def listar_rotas():
-    return [
-        {"path": route.path, "name": route.name}
-        for route in app.routes
-    ]
+    return [{"path": r.path, "name": r.name} for r in app.routes]
+
 
 # =========================
-# TINY ERP - ADMIN
+# TINY ERP - STATUS
 # =========================
 @app.get("/admin/tiny/status")
 def tiny_status():
     tiny_token = os.getenv("TINY_TOKEN")
-
     return {
         "status": "online",
         "tiny_configurado": bool(tiny_token),
         "mensagem": (
-            "Integração Tiny configurada e pronta para sincronização"
+            "Integração Tiny configurada"
             if tiny_token
-            else "TINY_TOKEN não configurado nas variáveis de ambiente"
+            else "TINY_TOKEN não configurado"
         )
     }
 
 
 # =========================
 # PRODUTOS PÚBLICOS
+# Lê da nova tabela 'products' com variantes embutidas
 # =========================
 @app.get("/produtos")
-def listar_produtos(unidade_id: str = None, limit: int = 2000):
-    query = supabase.table("produtos").select(
-        "id, nome, slug, imagem_url, preco_varejo, peso, comprimento, largura, altura, categoria, ativo"
-    ).eq("ativo", True).order("nome").limit(limit)
+def listar_produtos(categoria: str = None, limit: int = 500):
+    """
+    Retorna produtos agrupados com variantes embutidas.
+    Lê da tabela 'products' (nova estrutura).
+    """
+    query = (
+        supabase.table("products")
+        .select("id, nome, slug, categoria, imagem_principal, ativo")
+        .eq("ativo", True)
+        .order("nome")
+        .limit(limit)
+    )
 
-    if unidade_id:
-        query = query.eq("unidade_id", unidade_id)
+    if categoria:
+        query = query.ilike("categoria", f"%{categoria}%")
 
-    response = query.execute()
-    return response.data
+    resp = query.execute()
+    produtos = resp.data
+
+    # Para cada produto, busca as variantes
+    resultado = []
+    for prod in produtos:
+        vars_resp = (
+            supabase.table("product_variants")
+            .select("id, sku, variante, preco, estoque, peso, largura, altura, comprimento, imagem")
+            .eq("product_id", prod["id"])
+            .order("preco")
+            .execute()
+        )
+        prod["variantes"] = vars_resp.data
+        prod["preco_minimo"] = min((v["preco"] for v in vars_resp.data if v["preco"]), default=0)
+        resultado.append(prod)
+
+    return resultado
 
 
 @app.get("/produto/{slug}")
 def detalhe_produto(slug: str):
-    produto_resp = (
-        supabase
-        .table("produtos")
+    """
+    Retorna produto pai + todas as variantes + imagens.
+    """
+    prod_resp = (
+        supabase.table("products")
         .select("*")
         .eq("slug", slug)
         .eq("ativo", True)
@@ -180,94 +261,65 @@ def detalhe_produto(slug: str):
         .execute()
     )
 
-    produto = produto_resp.data
-
+    produto = prod_resp.data
     if not produto:
         raise HTTPException(status_code=404, detail="Produto não encontrado")
 
-    precos_resp = (
-        supabase
-        .table("produto_precos")
+    vars_resp = (
+        supabase.table("product_variants")
         .select("*")
-        .eq("produto_id", produto["id"])
-        .order("quantidade_minima")
+        .eq("product_id", produto["id"])
+        .order("preco")
         .execute()
     )
 
-    midias_resp = (
-        supabase
-        .table("produto_midias")
+    imgs_resp = (
+        supabase.table("product_images")
         .select("*")
-        .eq("produto_id", produto["id"])
-        .order("ordem")
+        .eq("product_id", produto["id"])
         .execute()
     )
 
     return {
         "produto": produto,
-        "precos": precos_resp.data,
-        "midias": midias_resp.data
+        "variantes": vars_resp.data,
+        "imagens": imgs_resp.data
     }
 
 
 # =========================
-# CALCULAR PREÇO AUTOMÁTICO
+# CALCULAR PREÇO
 # =========================
 @app.post("/calcular-preco")
 def calcular_preco(dados: CalcularPrecoRequest):
-    produto_id = dados.produto_id
-    quantidade = dados.quantidade
-
-    if quantidade <= 0:
-        raise HTTPException(status_code=400, detail="Quantidade inválida")
-
-    produto_resp = (
-        supabase
-        .table("produtos")
-        .select("id, nome")
-        .eq("id", produto_id)
+    # Busca variante pelo produto_id (agora é o id da variante)
+    var_resp = (
+        supabase.table("product_variants")
+        .select("*")
+        .eq("id", dados.produto_id)
         .single()
         .execute()
     )
 
-    produto = produto_resp.data
+    variante = var_resp.data
+    if not variante:
+        raise HTTPException(status_code=404, detail="Variante não encontrada")
 
-    if not produto:
-        raise HTTPException(status_code=404, detail="Produto não encontrado")
-
-    precos_resp = (
-        supabase
-        .table("produto_precos")
-        .select("*")
-        .eq("produto_id", produto_id)
-        .lte("quantidade_minima", quantidade)
-        .order("quantidade_minima", desc=True)
-        .limit(1)
-        .execute()
-    )
-
-    precos = precos_resp.data
-
-    if not precos:
-        raise HTTPException(status_code=404, detail="Preço não encontrado")
-
-    preco_aplicado = precos[0]
-    preco_unitario = float(preco_aplicado["preco_unitario"])
-    subtotal = preco_unitario * quantidade
+    preco_unitario = float(variante["preco"] or 0)
+    subtotal = preco_unitario * dados.quantidade
 
     return {
-        "produto_id": produto_id,
-        "produto": produto["nome"],
-        "quantidade": quantidade,
+        "variante_id": dados.produto_id,
+        "variante": variante["variante"],
+        "sku": variante["sku"],
+        "quantidade": dados.quantidade,
         "preco_unitario": preco_unitario,
-        "faixa_aplicada": preco_aplicado["quantidade_minima"],
-        "tipo": preco_aplicado.get("tipo"),
         "subtotal": subtotal
     }
 
 
 # =========================
-# COTAR FRETE - MELHOR ENVIO
+# COTAR FRETE
 # =========================
 @app.post("/cotar-frete")
 def cotar_frete(dados: CotarFreteRequest):
@@ -278,7 +330,6 @@ def cotar_frete(dados: CotarFreteRequest):
 
     if not token:
         raise HTTPException(status_code=500, detail="MELHOR_ENVIO_TOKEN não configurado")
-
     if not cep_origem:
         raise HTTPException(status_code=500, detail="CEP_ORIGEM não configurado")
 
@@ -288,40 +339,30 @@ def cotar_frete(dados: CotarFreteRequest):
     produtos_envio = []
 
     for item in dados.itens:
-        if item.quantidade <= 0:
-            raise HTTPException(status_code=400, detail="Quantidade inválida")
-
-        produto_resp = (
-            supabase
-            .table("produtos")
-            .select("id, nome, preco_varejo, peso, comprimento, largura, altura")
+        # Busca variante (nova estrutura)
+        var_resp = (
+            supabase.table("product_variants")
+            .select("*")
             .eq("id", item.produto_id)
             .single()
             .execute()
         )
 
-        produto = produto_resp.data
-
-        if not produto:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Produto não encontrado: {item.produto_id}"
-            )
+        variante = var_resp.data
+        if not variante:
+            raise HTTPException(status_code=404, detail=f"Variante não encontrada: {item.produto_id}")
 
         for campo in ["peso", "comprimento", "largura", "altura"]:
-            if produto.get(campo) is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Produto sem {campo} cadastrado: {produto.get('nome')}"
-                )
+            if not variante.get(campo):
+                raise HTTPException(status_code=400, detail=f"Variante sem {campo}: {variante.get('sku')}")
 
         produtos_envio.append({
-            "id": produto["id"],
-            "width": float(produto["largura"]),
-            "height": float(produto["altura"]),
-            "length": float(produto["comprimento"]),
-            "weight": float(produto["peso"]),
-            "insurance_value": float(produto.get("preco_varejo") or 1),
+            "id": variante["id"],
+            "width": float(variante["largura"]),
+            "height": float(variante["altura"]),
+            "length": float(variante["comprimento"]),
+            "weight": float(variante["peso"]),
+            "insurance_value": float(variante.get("preco") or 1),
             "quantity": item.quantidade
         })
 
@@ -329,10 +370,7 @@ def cotar_frete(dados: CotarFreteRequest):
         "from": {"postal_code": cep_origem},
         "to": {"postal_code": cep_destino},
         "products": produtos_envio,
-        "options": {
-            "receipt": False,
-            "own_hand": False
-        }
+        "options": {"receipt": False, "own_hand": False}
     }
 
     headers = {
@@ -344,25 +382,17 @@ def cotar_frete(dados: CotarFreteRequest):
 
     response = requests.post(
         f"{melhor_envio_url}/api/v2/me/shipment/calculate",
-        json=payload,
-        headers=headers,
-        timeout=30
+        json=payload, headers=headers, timeout=30
     )
 
     if response.status_code >= 400:
-        raise HTTPException(
-            status_code=response.status_code,
-            detail=response.text
-        )
+        raise HTTPException(status_code=response.status_code, detail=response.text)
 
     resultado = response.json()
-
     opcoes = []
-
     for frete in resultado:
         if frete.get("error"):
             continue
-
         opcoes.append({
             "id_servico": frete.get("id"),
             "transportadora": frete.get("company", {}).get("name"),
@@ -372,220 +402,266 @@ def cotar_frete(dados: CotarFreteRequest):
             "imagem": frete.get("company", {}).get("picture")
         })
 
-    return {
-        "cep_origem": cep_origem,
-        "cep_destino": cep_destino,
-        "produtos": produtos_envio,
-        "opcoes": opcoes,
-        "resposta_original": resultado
-    }
+    return {"cep_origem": cep_origem, "cep_destino": cep_destino, "opcoes": opcoes}
 
 
 # =========================
-# ADMIN - PRODUTOS
+# ADMIN - LISTAR PRODUTOS (nova estrutura)
 # =========================
 @app.get("/admin/produtos")
 def admin_listar_produtos():
-    resp = supabase.table("produtos").select("*").order("nome").execute()
+    resp = supabase.table("products").select("*").order("nome").execute()
     return resp.data
 
 
+# =========================
+# ADMIN - CADASTRAR PRODUTO MANUAL COM VARIANTES
+# =========================
 @app.post("/admin/produtos")
-def admin_criar_produto(dados: ProdutoAdminRequest):
-    resp = supabase.table("produtos").insert(dados.dict()).execute()
+def admin_criar_produto(dados: ProdutoComVariantesRequest):
+    slug = gerar_slug(dados.nome)
 
-    if not resp.data:
+    # Verifica se slug já existe
+    existe = supabase.table("products").select("id").eq("slug", slug).execute()
+    if existe.data:
+        slug = f"{slug}-{datetime.utcnow().strftime('%H%M%S')}"
+
+    prod_resp = supabase.table("products").insert({
+        "nome": dados.nome,
+        "slug": slug,
+        "categoria": dados.categoria,
+        "descricao": dados.descricao,
+        "imagem_principal": dados.imagem_principal,
+        "ativo": dados.ativo,
+    }).execute()
+
+    if not prod_resp.data:
         raise HTTPException(status_code=400, detail="Erro ao criar produto")
 
-    return resp.data[0]
+    produto_id = prod_resp.data[0]["id"]
+
+    # Insere variantes
+    variantes_criadas = []
+    for v in dados.variantes:
+        var_resp = supabase.table("product_variants").insert({
+            "product_id": produto_id,
+            "sku": v.sku,
+            "variante": v.variante,
+            "preco": v.preco,
+            "estoque": v.estoque,
+            "peso": v.peso,
+            "largura": v.largura,
+            "altura": v.altura,
+            "comprimento": v.comprimento,
+            "imagem": v.imagem,
+        }).execute()
+        if var_resp.data:
+            variantes_criadas.append(var_resp.data[0])
+
+    return {
+        "produto": prod_resp.data[0],
+        "variantes": variantes_criadas
+    }
 
 
 @app.put("/admin/produtos/{produto_id}")
 def admin_atualizar_produto(produto_id: str, dados: ProdutoAdminRequest):
     resp = (
-        supabase
-        .table("produtos")
+        supabase.table("products")
         .update(dados.dict())
         .eq("id", produto_id)
         .execute()
     )
-
     if not resp.data:
         raise HTTPException(status_code=404, detail="Produto não encontrado")
-
     return resp.data[0]
 
 
 @app.delete("/admin/produtos/{produto_id}")
 def admin_desativar_produto(produto_id: str):
     resp = (
-        supabase
-        .table("produtos")
+        supabase.table("products")
         .update({"ativo": False})
         .eq("id", produto_id)
         .execute()
     )
-
     if not resp.data:
         raise HTTPException(status_code=404, detail="Produto não encontrado")
-
     return {"status": "ok", "produto": resp.data[0]}
 
 
 # =========================
-# ADMIN - MÍDIAS
+# ADMIN - VARIANTES
 # =========================
-@app.get("/admin/produtos/{produto_id}/midias")
-def admin_listar_midias(produto_id: str):
+@app.post("/admin/produtos/{produto_id}/variantes")
+def admin_adicionar_variante(produto_id: str, dados: VarianteRequest):
+    resp = supabase.table("product_variants").insert({
+        "product_id": produto_id,
+        **dados.dict()
+    }).execute()
+    if not resp.data:
+        raise HTTPException(status_code=400, detail="Erro ao criar variante")
+    return resp.data[0]
+
+
+@app.put("/admin/variantes/{variante_id}")
+def admin_atualizar_variante(variante_id: str, dados: VarianteRequest):
     resp = (
-        supabase
-        .table("produto_midias")
-        .select("*")
-        .eq("produto_id", produto_id)
-        .order("ordem")
+        supabase.table("product_variants")
+        .update(dados.dict())
+        .eq("id", variante_id)
         .execute()
     )
-
-    return resp.data
-
-
-@app.post("/admin/produtos/{produto_id}/midias")
-def admin_adicionar_midia(produto_id: str, dados: MidiaProdutoRequest):
-    if dados.tipo not in ["imagem", "video"]:
-        raise HTTPException(status_code=400, detail="Tipo precisa ser imagem ou video")
-
-    resp = supabase.table("produto_midias").insert({
-        "produto_id": produto_id,
-        "tipo": dados.tipo,
-        "url": dados.url,
-        "ordem": dados.ordem
-    }).execute()
-
     if not resp.data:
-        raise HTTPException(status_code=400, detail="Erro ao adicionar mídia")
-
+        raise HTTPException(status_code=404, detail="Variante não encontrada")
     return resp.data[0]
+
+
+@app.delete("/admin/variantes/{variante_id}")
+def admin_deletar_variante(variante_id: str):
+    resp = (
+        supabase.table("product_variants")
+        .delete()
+        .eq("id", variante_id)
+        .execute()
+    )
+    return {"status": "ok"}
+
+
 # =========================
-# TINY - SYNC PRODUTOS COMPLETO
+# SINCRONIZAR TINY → SUPABASE
+# Este é o endpoint principal chamado pelo painel admin
+# Agrupa variantes automaticamente pelo padrão "Produto - 25unds"
 # =========================
-@app.post("/admin/tiny/sync-produtos")
-def sync_produtos_tiny():
+@app.post("/admin/sincronizar")
+def sincronizar_tiny():
+    """
+    Sincroniza todos os produtos do Tiny para o Supabase.
+    - Agrupa variantes automaticamente pelo padrão "Nome - variante"
+    - Salva em products + product_variants (upsert — não duplica)
+    - Ignora produtos sem categoria (itens internos)
+    """
     try:
-        produtos = buscar_produtos_tiny()
+        # 1. Busca todos os produtos do Tiny
+        produtos_tiny = buscar_produtos_tiny()
 
-        criados = []
-        atualizados = []
-        ignorados = []
+        if not produtos_tiny:
+            return {"status": "ok", "mensagem": "Nenhum produto retornado pelo Tiny"}
 
-        for p in produtos:
-            tiny_id = str(p.get("tiny_id") or "").strip()
+        # 2. Agrupa por produto pai
+        grupos, ignorados = agrupar_por_pai(produtos_tiny)
 
-            if not tiny_id:
-                ignorados.append({
-                    "produto": p.get("nome"),
-                    "motivo": "Produto sem tiny_id"
-                })
-                continue
+        criados = 0
+        atualizados = 0
+        erros = []
 
+        # 3. Salva cada grupo no Supabase
+        for nome_pai, dados in grupos.items():
             try:
-                produto_tiny = obter_produto_tiny(tiny_id)
-            except Exception as erro_detalhe:
-                ignorados.append({
-                    "produto": p.get("nome"),
-                    "tiny_id": tiny_id,
-                    "motivo": str(erro_detalhe)
-                })
+                slug = gerar_slug(nome_pai)
+
+                # Upsert na tabela products
+                existe_resp = (
+                    supabase.table("products")
+                    .select("id")
+                    .eq("slug", slug)
+                    .execute()
+                )
+
+                if existe_resp.data:
+                    produto_id = existe_resp.data[0]["id"]
+                    supabase.table("products").update({
+                        "nome": nome_pai,
+                        "categoria": dados["categoria"],
+                        "imagem_principal": dados["imagem_principal"],
+                        "ativo": True,
+                    }).eq("id", produto_id).execute()
+                    atualizados += 1
+                else:
+                    prod_resp = supabase.table("products").insert({
+                        "nome": nome_pai,
+                        "slug": slug,
+                        "categoria": dados["categoria"],
+                        "imagem_principal": dados["imagem_principal"],
+                        "ativo": True,
+                    }).execute()
+
+                    if not prod_resp.data:
+                        erros.append(f"Erro ao inserir: {nome_pai}")
+                        continue
+
+                    produto_id = prod_resp.data[0]["id"]
+                    criados += 1
+
+                # Upsert variantes: deleta as antigas e reinsere
+                supabase.table("product_variants").delete().eq("product_id", produto_id).execute()
+
+                for v in dados["variantes"]:
+                    supabase.table("product_variants").insert({
+                        "product_id": produto_id,
+                        "tiny_variant_id": v["tiny_id"],
+                        "sku": v["sku"],
+                        "variante": v["variante"],
+                        "preco": v["preco"],
+                        "estoque": v["estoque"],
+                        "peso": v["peso"],
+                        "largura": v["largura"],
+                        "altura": v["altura"],
+                        "comprimento": v["comprimento"],
+                        "imagem": v["imagem"],
+                    }).execute()
+
+                # Salva imagens em product_images
+                supabase.table("product_images").delete().eq("product_id", produto_id).execute()
+                imagens_unicas = list({v["imagem"] for v in dados["variantes"] if v["imagem"]})
+                for img_url in imagens_unicas:
+                    supabase.table("product_images").insert({
+                        "product_id": produto_id,
+                        "imagem_url": img_url,
+                    }).execute()
+
+            except Exception as e:
+                erros.append(f"{nome_pai}: {str(e)}")
                 continue
-
-            nome = produto_tiny.get("nome") or p.get("nome") or "Produto sem nome"
-
-            dados_produto = {
-                "tiny_id": tiny_id,
-                "sku": produto_tiny.get("sku") or p.get("sku"),
-                "nome": nome,
-                "slug": gerar_slug(nome),
-
-                "descricao": produto_tiny.get("descricao"),
-                "categoria": produto_tiny.get("categoria"),
-
-                "preco_varejo": to_float(produto_tiny.get("preco") or p.get("preco")),
-                "estoque": to_float(produto_tiny.get("estoque") or p.get("estoque")),
-
-                "peso": to_float(produto_tiny.get("peso")),
-                "comprimento": to_float(produto_tiny.get("comprimento")),
-                "largura": to_float(produto_tiny.get("largura")),
-                "altura": to_float(produto_tiny.get("altura")),
-
-                # ✅ IMAGEM DO TINY
-                "imagem_url": produto_tiny.get("imagem_url"),
-
-                "origem": "tiny",
-                "ativo": True,
-                "atualizado_tiny_em": datetime.utcnow().isoformat()
-            }
-
-            existe_resp = (
-                supabase
-                .table("produtos")
-                .select("id")
-                .eq("tiny_id", tiny_id)
-                .limit(1)
-                .execute()
-            )
-
-            if existe_resp.data:
-                produto_id = existe_resp.data[0]["id"]
-
-                resp = (
-                    supabase
-                    .table("produtos")
-                    .update(dados_produto)
-                    .eq("id", produto_id)
-                    .execute()
-                )
-
-                if resp.data:
-                    atualizados.append(resp.data[0])
-            else:
-                resp = (
-                    supabase
-                    .table("produtos")
-                    .insert(dados_produto)
-                    .execute()
-                )
-
-                if resp.data:
-                    criados.append(resp.data[0])
 
         return {
             "status": "ok",
-            "total_recebido": len(produtos),
-            "total_criados": len(criados),
-            "total_atualizados": len(atualizados),
-            "total_ignorados": len(ignorados),
-            "ignorados": ignorados[:20]
+            "total_recebido_tiny": len(produtos_tiny),
+            "grupos_pai": len(grupos),
+            "criados": criados,
+            "atualizados": atualizados,
+            "ignorados_sem_categoria": len(ignorados),
+            "erros": erros[:10],
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================
+# SYNC ANTIGO (mantido por compatibilidade)
+# =========================
+@app.post("/admin/tiny/sync-produtos")
+def sync_produtos_tiny_legado():
+    """Redireciona para o novo endpoint de sincronização."""
+    return sincronizar_tiny()
+
+
 # =========================
 # DEBUG - PRODUTO TINY
 # =========================
 @app.get("/admin/tiny/debug-produto/{tiny_id}")
 def debug_produto_tiny(tiny_id: str):
     token = os.getenv("TINY_TOKEN")
-
     if not token:
         raise HTTPException(status_code=500, detail="TINY_TOKEN não configurado")
 
     url = "https://api.tiny.com.br/api2/produto.obter.php"
-
-    params = {
-        "token": token,
-        "id": tiny_id,
-        "formato": "JSON"
-    }
-
+    params = {"token": token, "id": tiny_id, "formato": "JSON"}
     response = requests.get(url, params=params, timeout=30)
-
     return response.json()
+
+
+@app.get("/teste-obter-produto/{tiny_id}")
+def teste_obter_produto(tiny_id: str):
+    return obter_produto_tiny(tiny_id)
