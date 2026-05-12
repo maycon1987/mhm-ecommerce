@@ -121,8 +121,23 @@ def buscar_produtos_tiny(pagina: int = None):
                     continue
 
                 except Exception as e:
-                    nome_erro = nome or tiny_id
-                    raise Exception(f"{nome_erro}: {e}")
+                    # Nao propaga — apenas registra e continua
+                    todos_produtos.append({
+                        "tiny_id":     tiny_id,
+                        "nome":        f"__ERRO__{nome or tiny_id}",
+                        "sku":         prod.get("codigo"),
+                        "preco":       prod.get("preco"),
+                        "preco_varejo": prod.get("preco"),
+                        "estoque":     0,
+                        "imagem_url":  imagem_url,
+                        "categoria":   "",
+                        "peso":        0,
+                        "largura":     0,
+                        "altura":      0,
+                        "comprimento": 0,
+                        "_erro":       str(e),
+                    })
+                    continue
 
             # Produto simples sem grade
             todos_produtos.append({
