@@ -1,5 +1,6 @@
 import os
 import requests
+import time
 
 
 def get_tiny_token():
@@ -12,8 +13,7 @@ def get_tiny_token():
 def buscar_produtos_tiny():
     """
     Busca todos os produtos do Tiny com todos os campos necessários.
-    Retorna lista com: tiny_id, nome, sku, preco, estoque,
-    imagem_url, categoria, peso, largura, altura, comprimento.
+    Para produtos sem categoria na pesquisa, busca o detalhe individual.
     """
     token = get_tiny_token()
     url = "https://api.tiny.com.br/api2/produtos.pesquisa.php"
@@ -37,7 +37,6 @@ def buscar_produtos_tiny():
         retorno = data.get("retorno", {})
 
         if retorno.get("status") != "OK":
-            # Fim de páginas ou sem produtos — encerra sem erro
             break
 
         produtos = retorno.get("produtos", [])
@@ -54,21 +53,32 @@ def buscar_produtos_tiny():
             if not isinstance(p, dict):
                 continue
 
-            # Extrai imagem da lista de anexos (formato real do Tiny)
             imagem_url = _extrair_imagem(p)
+            categoria = (p.get("categoria") or "").strip()
+
+            # Se não veio categoria na pesquisa, busca o detalhe individual
+            if not categoria and p.get("id"):
+                try:
+                    time.sleep(0.1)  # Evita rate limit
+                    detalhe = obter_produto_tiny(str(p.get("id")))
+                    categoria = (detalhe.get("categoria") or "").strip()
+                    if not imagem_url:
+                        imagem_url = detalhe.get("imagem_url")
+                except Exception:
+                    pass
 
             todos_produtos.append({
-                "tiny_id":    p.get("id"),
-                "nome":       p.get("nome"),
-                "sku":        p.get("codigo"),
-                "preco":      p.get("preco"),
+                "tiny_id":     p.get("id"),
+                "nome":        p.get("nome"),
+                "sku":         p.get("codigo"),
+                "preco":       p.get("preco"),
                 "preco_varejo": p.get("preco"),
-                "estoque":    p.get("estoqueAtual"),
-                "imagem_url": imagem_url,
-                "categoria":  p.get("categoria"),
-                "peso":       p.get("peso_bruto") or p.get("peso"),
-                "largura":    p.get("largura"),
-                "altura":     p.get("altura"),
+                "estoque":     p.get("estoqueAtual"),
+                "imagem_url":  imagem_url,
+                "categoria":   categoria,
+                "peso":        p.get("peso_bruto") or p.get("peso"),
+                "largura":     p.get("largura"),
+                "altura":      p.get("altura"),
                 "comprimento": p.get("comprimento"),
             })
 
@@ -82,7 +92,7 @@ def buscar_produtos_tiny():
     return todos_produtos
 
 
-def _extrair_imagem(produto: dict) -> str | None:
+def _extrair_imagem(produto: dict):
     """Extrai URL da imagem principal de um produto do Tiny."""
     anexos = produto.get("anexos") or []
 
@@ -108,7 +118,6 @@ def _extrair_imagem(produto: dict) -> str | None:
         elif isinstance(anexo, dict):
             return anexo.get("url")
 
-    # Fallback para campos diretos
     return produto.get("imagem") or produto.get("urlImagem")
 
 
