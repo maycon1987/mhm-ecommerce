@@ -10,6 +10,19 @@ def get_tiny_token():
     return token
 
 
+def _obter_com_retry(tiny_id: str, tentativas: int = 3, delay: float = 2.0):
+    """Tenta obter produto com retry em caso de erro de rede."""
+    ultimo_erro = None
+    for i in range(tentativas):
+        try:
+            return obter_produto_tiny(tiny_id)
+        except Exception as e:
+            ultimo_erro = e
+            if i < tentativas - 1:
+                time.sleep(delay * (i + 1))  # delay crescente: 2s, 4s, 6s
+    raise ultimo_erro
+
+
 def buscar_produtos_tiny(pagina: int = None):
     """
     Busca produtos do Tiny.
@@ -56,8 +69,8 @@ def buscar_produtos_tiny(pagina: int = None):
             # Produto com grade — busca detalhe completo
             if tipo_variacao == "P" or not categoria:
                 try:
-                    time.sleep(0.15)
-                    detalhe = obter_produto_tiny(tiny_id)
+                    time.sleep(0.5)  # delay maior para evitar Resource unavailable
+                    detalhe = _obter_com_retry(tiny_id)
                     categoria = (detalhe.get("categoria") or categoria).strip()
                     if not imagem_url:
                         imagem_url = detalhe.get("imagem_url")
@@ -66,7 +79,11 @@ def buscar_produtos_tiny(pagina: int = None):
                     variacoes = detalhe.get("variacoes") or []
                     if variacoes and categoria:
                         for var_item in variacoes:
-                            var = var_item.get("variacao", {})
+                            if isinstance(var_item, dict) and "grade" in var_item:
+                                var = var_item
+                            else:
+                                var = var_item.get("variacao", var_item) if isinstance(var_item, dict) else {}
+
                             grade = var.get("grade", {})
                             quantidade = list(grade.values())[0] if grade else "1un"
 
@@ -103,8 +120,9 @@ def buscar_produtos_tiny(pagina: int = None):
                     })
                     continue
 
-                except Exception:
-                    pass
+                except Exception as e:
+                    nome_erro = nome or tiny_id
+                    raise Exception(f"{nome_erro}: {e}")
 
             # Produto simples sem grade
             todos_produtos.append({
@@ -195,9 +213,10 @@ def obter_produto_tiny(tiny_id: str):
     variacoes_raw = produto.get("variacoes") or []
     variacoes = []
     for v in variacoes_raw:
-        var = v.get("variacao", {})
-        if var:
-            variacoes.append(var)
+        if isinstance(v, dict):
+            var = v.get("variacao", v)
+            if var:
+                variacoes.append(var)
 
     return {
         "tiny_id":     tiny_id,
