@@ -134,10 +134,10 @@ def extrair_pai_e_variante(nome: str):
 def agrupar_por_pai(produtos: list) -> dict:
     """
     Agrupa lista de produtos pelo produto pai.
-    Usa a categoria da tabela 'produtos' antiga quando o Tiny não retorna.
-    Produtos sem categoria em nenhuma fonte são ignorados.
+    Prioriza categoria e imagem que vêm diretamente do Tiny.
+    Usa tabela antiga apenas como fallback para produtos sem categoria no Tiny.
     """
-    # Busca mapa nome → categoria da tabela antiga (que já tem as categorias)
+    # Busca mapa nome → categoria/imagem da tabela antiga (fallback)
     cat_map = {}
     img_map = {}
     try:
@@ -151,7 +151,7 @@ def agrupar_por_pai(produtos: list) -> dict:
             if nome_row and img:
                 img_map[nome_row] = img
     except Exception:
-        pass  # Se falhar, segue sem o mapa
+        pass
 
     grupos = {}
     ignorados = []
@@ -161,54 +161,46 @@ def agrupar_por_pai(produtos: list) -> dict:
         if not nome:
             continue
 
-        # Tenta pegar categoria do Tiny, senão busca do mapa da tabela antiga
+        pai, variante = extrair_pai_e_variante(nome)
+
+        # Categoria: prioriza Tiny, fallback tabela antiga (pelo nome da variante ou pai)
         categoria = (p.get("categoria") or "").strip()
         if not categoria:
-            categoria = cat_map.get(nome, "")
+            categoria = cat_map.get(nome, "") or cat_map.get(pai, "")
 
-        # Imagem: tenta do Tiny, senão do mapa antigo
-        imagem_url = p.get("imagem_url") or img_map.get(nome)
+        # Imagem: prioriza Tiny, fallback tabela antiga
+        imagem_url = p.get("imagem_url") or img_map.get(nome) or img_map.get(pai)
 
         if not categoria:
             ignorados.append(nome)
             continue
 
-        pai, variante = extrair_pai_e_variante(nome)
-
-        # Tenta imagem do pai também
-        if not imagem_url:
-            imagem_url = img_map.get(nome)
-
         if pai not in grupos:
-            # Categoria do produto pai
-            cat_pai = categoria or cat_map.get(pai, "")
-            img_pai = imagem_url or img_map.get(pai)
             grupos[pai] = {
-                "categoria": cat_pai,
-                "imagem_principal": img_pai,
+                "categoria": categoria,
+                "imagem_principal": imagem_url,
                 "variantes": []
             }
 
+        # Atualiza imagem e categoria do pai se ainda não tem
         if imagem_url and not grupos[pai]["imagem_principal"]:
             grupos[pai]["imagem_principal"] = imagem_url
-
         if not grupos[pai]["categoria"] and categoria:
             grupos[pai]["categoria"] = categoria
 
         grupos[pai]["variantes"].append({
-            "tiny_id":    str(p.get("tiny_id") or p.get("id") or ""),
-            "sku":        p.get("sku") or p.get("codigo") or "",
-            "variante":   variante,
-            "preco":      to_float(p.get("preco_varejo") or p.get("preco")),
-            "estoque":    to_float(p.get("estoque")),
-            "peso":       to_float(p.get("peso")),
-            "largura":    to_float(p.get("largura")),
-            "altura":     to_float(p.get("altura")),
+            "tiny_id":     str(p.get("tiny_id") or p.get("id") or ""),
+            "sku":         p.get("sku") or p.get("codigo") or "",
+            "variante":    variante,
+            "preco":       to_float(p.get("preco_varejo") or p.get("preco")),
+            "estoque":     to_float(p.get("estoque")),
+            "peso":        to_float(p.get("peso")),
+            "largura":     to_float(p.get("largura")),
+            "altura":      to_float(p.get("altura")),
             "comprimento": to_float(p.get("comprimento")),
-            "imagem":     imagem_url,
+            "imagem":      imagem_url,
         })
 
-    # Remove grupos que ficaram sem categoria mesmo depois do cruzamento
     grupos_validos = {k: v for k, v in grupos.items() if v["categoria"]}
     ignorados += [k for k, v in grupos.items() if not v["categoria"]]
 
