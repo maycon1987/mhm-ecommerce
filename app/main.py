@@ -245,7 +245,7 @@ def tiny_status():
 def listar_produtos(categoria: str = None, limit: int = 500):
     """
     Retorna produtos agrupados com variantes embutidas.
-    Lê da tabela 'products' (nova estrutura).
+    Otimizado: busca todas as variantes em 2 queries.
     """
     try:
         query = (
@@ -262,20 +262,32 @@ def listar_produtos(categoria: str = None, limit: int = 500):
         resp = query.execute()
         produtos = resp.data or []
 
+        if not produtos:
+            return []
+
+        # Busca TODAS as variantes de uma vez só
+        product_ids = [p["id"] for p in produtos]
+        vars_resp = (
+            supabase.table("product_variants")
+            .select("id, product_id, sku, variante, preco, estoque, peso, largura, altura, comprimento, imagem")
+            .in_("product_id", product_ids)
+            .order("preco")
+            .execute()
+        )
+        todas_variantes = vars_resp.data or []
+
+        # Agrupa variantes por product_id
+        variantes_por_produto = {}
+        for v in todas_variantes:
+            pid = v["product_id"]
+            if pid not in variantes_por_produto:
+                variantes_por_produto[pid] = []
+            variantes_por_produto[pid].append(v)
+
+        # Monta resultado
         resultado = []
         for prod in produtos:
-            try:
-                vars_resp = (
-                    supabase.table("product_variants")
-                    .select("id, sku, variante, preco, estoque, peso, largura, altura, comprimento, imagem")
-                    .eq("product_id", prod["id"])
-                    .order("preco")
-                    .execute()
-                )
-                variantes = vars_resp.data or []
-            except Exception:
-                variantes = []
-
+            variantes = variantes_por_produto.get(prod["id"], [])
             precos = [v["preco"] for v in variantes if v.get("preco")]
             prod["variantes"] = variantes
             prod["preco_minimo"] = min(precos) if precos else 0
@@ -292,39 +304,50 @@ def detalhe_produto(slug: str):
     """
     Retorna produto pai + todas as variantes + imagens.
     """
-    prod_resp = (
-        supabase.table("products")
-        .select("*")
-        .eq("slug", slug)
-        .eq("ativo", True)
-        .single()
-        .execute()
-    )
+    try:
+        prod_resp = (
+            supabase.table("products")
+            .select("*")
+            .eq("slug", slug)
+            .eq("ativo", True)
+            .limit(1)
+            .execute()
+        )
 
-    produto = prod_resp.data
-    if not produto:
-        raise HTTPException(status_code=404, detail="Produto não encontrado")
+        if not prod_resp.data:
+            raise HTTPException(status_code=404, detail="Produto não encontrado")
 
-    vars_resp = (
-        supabase.table("product_variants")
-        .select("*")
-        .eq("product_id", produto["id"])
-        .order("preco")
-        .execute()
-    )
+        produto = prod_resp.data[0]
 
-    imgs_resp = (
-        supabase.table("product_images")
-        .select("*")
-        .eq("product_id", produto["id"])
-        .execute()
-    )
+        vars_resp = (
+            supabase.table("product_variants")
+            .select("*")
+            .eq("product_id", produto["id"])
+            .order("preco")
+            .execute()
+        )
 
-    return {
-        "produto": produto,
-        "variantes": vars_resp.data,
-        "imagens": imgs_resp.data
-    }
+        imgs_resp = (
+            supabase.table("product_images")
+            .select("*")
+            .eq("product_id", produto["id"])
+            .execute()
+        )
+
+        variantes = vars_resp.data or []
+        precos = [v["preco"] for v in variantes if v.get("preco")]
+
+        return {
+            **produto,
+            "variantes": variantes,
+            "imagens": imgs_resp.data or [],
+            "preco_minimo": min(precos) if precos else 0,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =========================
@@ -807,3 +830,25 @@ def debug_produto_tiny(tiny_id: str):
 @app.get("/teste-obter-produto/{tiny_id}")
 def teste_obter_produto(tiny_id: str):
     return obter_produto_tiny(tiny_id)
+
+
+@app.get("/admin/debug/pagina/{pagina}")
+def debug_pagina(pagina: int, filtro: str = ""):
+    """
+    Retorna os produtos brutos que o tiny_service monta para uma página,
+    sem salvar no banco. Útil para debugar o que está sendo ignorado.
+    """
+    try:
+        produtos = buscar_produtos_tiny(pagina=pagina)
+        if filtro:
+            produtos = [p for p in produtos if filtro.lower() in (p.get("nome") or "").lower()]
+        grupos, ignorados = agrupar_por_pai(produtos)
+        return {
+            "total_bruto": len(produtos),
+            "grupos": len(grupos),
+            "ignorados": ignorados[:20],
+            "nomes_grupos": list(grupos.keys())[:50],
+            "amostra_produtos": produtos[:5] if not filtro else produtos[:20],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
