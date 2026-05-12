@@ -1,6 +1,5 @@
 import os
 import requests
-import time
 
 
 def get_tiny_token():
@@ -10,28 +9,26 @@ def get_tiny_token():
     return token
 
 
-def buscar_produtos_tiny():
+def buscar_produtos_tiny(pagina: int = None):
     """
-    Busca todos os produtos do Tiny com todos os campos necessários.
-    Para produtos sem categoria na pesquisa, busca o detalhe individual.
+    Busca produtos do Tiny.
+    Se pagina=None, busca todas as páginas.
+    Se pagina=N, busca só aquela página.
     """
     token = get_tiny_token()
     url = "https://api.tiny.com.br/api2/produtos.pesquisa.php"
 
     todos_produtos = []
-    pagina = 1
+    pagina_inicio = pagina if pagina else 1
+    pagina_fim = pagina if pagina else None
 
+    p = pagina_inicio
     while True:
-        params = {
-            "token": token,
-            "formato": "JSON",
-            "pagina": pagina
-        }
-
+        params = {"token": token, "formato": "JSON", "pagina": p}
         response = requests.get(url, params=params, timeout=30)
 
         if response.status_code != 200:
-            raise Exception(f"Erro Tiny pesquisa página {pagina}: {response.text}")
+            break
 
         data = response.json()
         retorno = data.get("retorno", {})
@@ -40,60 +37,67 @@ def buscar_produtos_tiny():
             break
 
         produtos = retorno.get("produtos", [])
-
         if not produtos:
             break
 
         for item in produtos:
             if not isinstance(item, dict):
                 continue
-
-            p = item.get("produto", {})
-
-            if not isinstance(p, dict):
+            prod = item.get("produto", {})
+            if not isinstance(prod, dict):
                 continue
 
-            imagem_url = _extrair_imagem(p)
-            categoria = (p.get("categoria") or "").strip()
-
-            # Se não veio categoria na pesquisa, busca o detalhe individual
-            if not categoria and p.get("id"):
-                try:
-                    time.sleep(0.1)  # Evita rate limit
-                    detalhe = obter_produto_tiny(str(p.get("id")))
-                    categoria = (detalhe.get("categoria") or "").strip()
-                    if not imagem_url:
-                        imagem_url = detalhe.get("imagem_url")
-                except Exception:
-                    pass
+            imagem_url = _extrair_imagem(prod)
+            categoria = (prod.get("categoria") or "").strip()
 
             todos_produtos.append({
-                "tiny_id":     p.get("id"),
-                "nome":        p.get("nome"),
-                "sku":         p.get("codigo"),
-                "preco":       p.get("preco"),
-                "preco_varejo": p.get("preco"),
-                "estoque":     p.get("estoqueAtual"),
+                "tiny_id":     prod.get("id"),
+                "nome":        prod.get("nome"),
+                "sku":         prod.get("codigo"),
+                "preco":       prod.get("preco"),
+                "preco_varejo": prod.get("preco"),
+                "estoque":     prod.get("estoqueAtual"),
                 "imagem_url":  imagem_url,
                 "categoria":   categoria,
-                "peso":        p.get("peso_bruto") or p.get("peso"),
-                "largura":     p.get("largura"),
-                "altura":      p.get("altura"),
-                "comprimento": p.get("comprimento"),
+                "peso":        prod.get("peso_bruto") or prod.get("peso"),
+                "largura":     prod.get("largura"),
+                "altura":      prod.get("altura"),
+                "comprimento": prod.get("comprimento"),
             })
 
         numero_paginas = int(retorno.get("numero_paginas", 1))
 
-        if pagina >= numero_paginas:
+        if pagina_fim and p >= pagina_fim:
+            break
+        if p >= numero_paginas:
             break
 
-        pagina += 1
+        p += 1
 
     return todos_produtos
 
 
+def buscar_numero_paginas_tiny():
+    """Retorna o número total de páginas do Tiny."""
+    token = get_tiny_token()
+    url = "https://api.tiny.com.br/api2/produtos.pesquisa.php"
+    params = {"token": token, "formato": "JSON", "pagina": 1}
+    response = requests.get(url, params=params, timeout=30)
+    data = response.json()
+    retorno = data.get("retorno", {})
+    return int(retorno.get("numero_paginas", 1))
+
+
+def buscar_categoria_produto(tiny_id: str) -> str:
+    """Busca a categoria de um produto específico no Tiny."""
+    try:
+        detalhe = obter_produto_tiny(tiny_id)
+        return (detalhe.get("categoria") or "").strip()
+    except Exception:
+        return ""
+
+
 def _extrair_imagem(produto: dict):
-    """Extrai URL da imagem principal de um produto do Tiny."""
     anexos = produto.get("anexos") or []
 
     if isinstance(anexos, list) and len(anexos) > 0:
@@ -124,13 +128,7 @@ def _extrair_imagem(produto: dict):
 def obter_produto_tiny(tiny_id: str):
     token = get_tiny_token()
     url = "https://api.tiny.com.br/api2/produto.obter.php"
-
-    params = {
-        "token": token,
-        "id": tiny_id,
-        "formato": "JSON"
-    }
-
+    params = {"token": token, "id": tiny_id, "formato": "JSON"}
     response = requests.get(url, params=params, timeout=30)
 
     if response.status_code != 200:
