@@ -1,6 +1,6 @@
 from datetime import datetime
 import re
-from app.services.tiny_service import buscar_produtos_tiny, obter_produto_tiny
+from app.services.tiny_service import buscar_produtos_tiny, buscar_numero_paginas_tiny, obter_produto_tiny
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -685,6 +685,108 @@ def sincronizar_tiny():
 def sync_produtos_tiny_legado():
     """Redireciona para o novo endpoint de sincronização."""
     return sincronizar_tiny()
+
+
+# =========================
+# SINCRONIZAR POR PÁGINA (evita timeout)
+# =========================
+@app.post("/admin/sincronizar/pagina/{pagina}")
+def sincronizar_pagina(pagina: int):
+    """
+    Sincroniza apenas uma página de produtos do Tiny.
+    Use quando a sincronização completa der timeout.
+    Chame em sequência: /admin/sincronizar/pagina/1, /2, /3...
+    """
+    try:
+        produtos_tiny = buscar_produtos_tiny(pagina=pagina)
+
+        if not produtos_tiny:
+            return {"status": "ok", "pagina": pagina, "mensagem": "Página vazia"}
+
+        grupos, ignorados = agrupar_por_pai(produtos_tiny)
+
+        criados = 0
+        atualizados = 0
+        erros = []
+
+        for nome_pai, dados in grupos.items():
+            try:
+                slug = gerar_slug(nome_pai)
+                existe_resp = supabase.table("products").select("id").eq("slug", slug).execute()
+
+                if existe_resp.data:
+                    produto_id = existe_resp.data[0]["id"]
+                    supabase.table("products").update({
+                        "nome": nome_pai,
+                        "categoria": dados["categoria"],
+                        "imagem_principal": dados["imagem_principal"],
+                        "ativo": True,
+                    }).eq("id", produto_id).execute()
+                    atualizados += 1
+                else:
+                    prod_resp = supabase.table("products").insert({
+                        "nome": nome_pai,
+                        "slug": slug,
+                        "categoria": dados["categoria"],
+                        "imagem_principal": dados["imagem_principal"],
+                        "ativo": True,
+                    }).execute()
+
+                    if not prod_resp.data:
+                        erros.append(f"Erro ao inserir: {nome_pai}")
+                        continue
+
+                    produto_id = prod_resp.data[0]["id"]
+                    criados += 1
+
+                supabase.table("product_variants").delete().eq("product_id", produto_id).execute()
+
+                for v in dados["variantes"]:
+                    supabase.table("product_variants").insert({
+                        "product_id": produto_id,
+                        "tiny_variant_id": v["tiny_id"],
+                        "sku": v["sku"],
+                        "variante": v["variante"],
+                        "preco": v["preco"],
+                        "estoque": v["estoque"],
+                        "peso": v["peso"],
+                        "largura": v["largura"],
+                        "altura": v["altura"],
+                        "comprimento": v["comprimento"],
+                        "imagem": v["imagem"],
+                    }).execute()
+
+            except Exception as e:
+                erros.append(f"{nome_pai}: {str(e)}")
+                continue
+
+        return {
+            "status": "ok",
+            "pagina": pagina,
+            "recebidos": len(produtos_tiny),
+            "grupos_pai": len(grupos),
+            "criados": criados,
+            "atualizados": atualizados,
+            "ignorados_sem_categoria": len(ignorados),
+            "erros": erros[:5],
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/admin/sincronizar/status")
+def status_sincronizacao():
+    """Retorna total de páginas do Tiny e total de produtos no Supabase."""
+    try:
+        total_paginas = buscar_numero_paginas_tiny()
+        total_supabase = supabase.table("products").select("id", count="exact").execute()
+        return {
+            "total_paginas_tiny": total_paginas,
+            "total_produtos_supabase": total_supabase.count,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # =========================
